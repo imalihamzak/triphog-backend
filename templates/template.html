@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Welcome to Trip Hog</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f4f4f4;
+        margin: 0;
+        padding: 0;
+      }
+      .container {
+        width: 100%;
+        max-width: 600px;
+        margin: 0 auto;
+        background-color: #ffffff;
+        padding: 20px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      .header {
+        background-color: darkblue;
+        color: white;
+        padding: 10px 0;
+        text-align: center;
+      }
+      .content {
+        margin: 20px 0;
+      }
+      .button {
+        display: inline-block;
+        padding: 10px 20px;
+        color: white !important;
+        background-color: #0044cc !important;
+        text-decoration: none !important;
+        border-radius: 5px;
+      }
+      .footer {
+        margin-top: 20px;
+        text-align: center;
+        background-color: darkblue;
+        font-size: 12px;
+        color: white;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>Welcome to Trip Hog!</h1>
+      </div>
+      <div class="content">
+        <p>Dear {{name}},</p>
+        <p>
+          Welcome to Trip Hog. To complete registration, please create a password
+          for your account by clicking on the button below
+        </p>
+
+        <p><a href="{{passwordCreationLink}}" class="button">Click Here</a></p>
+      </div>
+      <div class="footer">
+        <p>
+          If you have any questions or need assistance,feel free to contact us.
+        </p>
+        <p>&copy; 2026 Trip Hog. All rights reserved.</p>
+      </div>
+    </div>
+  </body>
+</html>

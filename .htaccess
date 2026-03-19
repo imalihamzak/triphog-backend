@@ -1,0 +1,52 @@
+# Apache Reverse Proxy Configuration for api.triphog.net
+# Place this file in: public_html/api.triphog.net/.htaccess
+# 
+# IMPORTANT: Update PORT (21098) to match your actual Node.js server port
+# Check your .env file in home/triphog/backend for the PORT value
+
+RewriteEngine On
+
+# Enable proxy module (required for reverse proxy)
+<IfModule mod_proxy.c>
+    ProxyPreserveHost On
+    ProxyRequests Off
+    
+    # Forward all HTTP requests to Node.js server
+    # CHANGE 21098 TO YOUR ACTUAL PORT FROM .env FILE
+    ProxyPass / http://localhost:21098/
+    ProxyPassReverse / http://localhost:21098/
+    
+    # WebSocket support for Socket.IO
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule ^/?(.*) ws://localhost:21098/$1 [P,L]
+    
+    RewriteCond %{HTTP:Upgrade} !=websocket [NC]
+    RewriteRule ^/?(.*) http://localhost:21098/$1 [P,L]
+    
+    # Socket.IO polling transport (fallback)
+    RewriteCond %{REQUEST_URI} ^/socket.io [NC]
+    RewriteRule ^/?(.*) http://localhost:21098/$1 [P,L]
+</IfModule>
+
+# CORS headers (backup - your Node.js server should handle this)
+<IfModule mod_headers.c>
+    # Allow requests from your frontend domain
+    Header set Access-Control-Allow-Origin "https://triphog.net"
+    Header set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+    Header set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With, Accept, Origin"
+    Header set Access-Control-Allow-Credentials "true"
+    
+    # Handle preflight OPTIONS requests
+    RewriteCond %{REQUEST_METHOD} OPTIONS
+    RewriteRule ^(.*)$ $1 [R=200,L]
+</IfModule>
+
+# Error handling
+ErrorDocument 502 "Bad Gateway: Node.js server is not responding. Please check if the server is running on port 21098"
+
+# Security: Prevent direct access to .htaccess
+<Files .htaccess>
+    Order allow,deny
+    Deny from all
+</Files>
+
