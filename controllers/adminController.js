@@ -20,7 +20,7 @@ const mailerTransport = createEmailTransporter();
 // Helper function to create and send token via cookie
 const createSendToken = (admin, statusCode, res) => {
   const token = jwt.sign({ id: admin._id }, JWT_SECRET, {
-    expiresIn: "6d",
+    expiresIn: "5d",
   });
 
   // Convert JWT_COOKIE_EXPIRES_IN to a number and calculate milliseconds
