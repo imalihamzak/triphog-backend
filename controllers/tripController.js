@@ -122,6 +122,8 @@ exports.deleteSelected = async (req, res) => {
 };
 exports.updateStatus = async (req, res) => {
   try {
+    const DEFAULT_FROM_PHOTO_URL =
+      "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRo1KQPQY6ldUIZfCi4UOUx6ide2_s0vuIxRQ&s";
     if (req.body.status == "Cancelled") {
       let trip = await TripModel.findOne({ _id: req.params.tripId });
       let driver = await DriverModel.findOne({ _id: trip.driverRef });
@@ -129,7 +131,7 @@ exports.updateStatus = async (req, res) => {
         let notification = new NotificationModel({
           fromId: driver._id,
           toId: trip.patientRef ? trip.patientRef : "randomReference",
-          fromPhotoUrl: driver.profilePhotoUrl,
+          fromPhotoUrl: driver.profilePhotoUrl || DEFAULT_FROM_PHOTO_URL,
           type: "TripCancelled",
           text: "Cancelled Your Trip",
           from: driver.firstName + driver.lastName,
@@ -139,7 +141,7 @@ exports.updateStatus = async (req, res) => {
       let notification2 = new NotificationModel({
         fromId: driver._id,
         toId: trip.addedBy ? trip.addedBy : "Admin",
-        fromPhotoUrl: driver.profilePhotoUrl,
+        fromPhotoUrl: driver.profilePhotoUrl || DEFAULT_FROM_PHOTO_URL,
         type: "TripCancelled",
         text: "Cancelled Your Trip",
         from: driver.firstName + driver.lastName,
@@ -1340,6 +1342,8 @@ exports.getTripById = async (req, res) => {
 exports.updateTrip = async (req, res) => {
   let trip = await TripModel.findById(req.params.tripId)
   try {
+    const DEFAULT_FROM_PHOTO_URL =
+      "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRo1KQPQY6ldUIZfCi4UOUx6ide2_s0vuIxRQ&s";
     const newDriverId = req.body.driverRef ? String(req.body.driverRef).trim() : null;
     const currentDriverId = trip.driverRef ? String(trip.driverRef) : null;
     const isReassigning = newDriverId && newDriverId !== currentDriverId;
@@ -1348,6 +1352,26 @@ exports.updateTrip = async (req, res) => {
     if (isReassigning) {
       const driver = await DriverModel.findById(newDriverId);
       if (driver) {
+        // Company lock: prevent assigning drivers from another company
+        const tripAdmin = await Admin.findById(trip.addedBy)
+          .select("companyCode")
+          .lean()
+          .catch(() => null);
+        const driverAdmin = await Admin.findById(driver.addedBy)
+          .select("companyCode")
+          .lean()
+          .catch(() => null);
+
+        const tripCompanyCode = tripAdmin?.companyCode ? String(tripAdmin.companyCode).trim() : null;
+        const driverCompanyCode = driverAdmin?.companyCode ? String(driverAdmin.companyCode).trim() : null;
+
+        if (tripCompanyCode && driverCompanyCode && tripCompanyCode !== driverCompanyCode) {
+          return res.status(403).json({
+            success: false,
+            message: "You can only assign drivers from your company.",
+          });
+        }
+
         req.body.driverName = `${driver.firstName} ${driver.lastName}`;
         req.body.driverSignatureUrl = driver.signatureUrl;
         if (req.body.status === "Not Assigned") {
@@ -1362,7 +1386,7 @@ exports.updateTrip = async (req, res) => {
         // Notify new driver so reassignment reflects immediately on their dashboard
         const admin = await Admin.findById(trip.addedBy).select("firstName lastName photo").lean();
         const fromName = admin ? `${admin.firstName || ""} ${admin.lastName || ""}`.trim() || "Admin" : "Admin";
-        const fromPhoto = admin?.photo || "";
+        const fromPhoto = admin?.photo || DEFAULT_FROM_PHOTO_URL;
         const notification = new NotificationModel({
           fromId: trip.addedBy,
           toId: newDriverId,
@@ -1389,12 +1413,26 @@ exports.updateTrip = async (req, res) => {
       console.log("Patient Ref", trip.patientRef)
       console.log("Driver Ref", trip.driverRef)
       if (trip.patientRef) {
-        let notification = new NotificationModel({ fromId: admin._id, toId: trip.patientRef, fromPhotoUrl: admin.photo, type: "TripCancelled", text: "Cancelled Your Trip", from: admin.firstName + admin.lastName })
+        let notification = new NotificationModel({
+          fromId: admin._id,
+          toId: trip.patientRef,
+          fromPhotoUrl: admin.photo || DEFAULT_FROM_PHOTO_URL,
+          type: "TripCancelled",
+          text: "Cancelled Your Trip",
+          from: admin.firstName + admin.lastName
+        })
         await notification.save()
 
       }
       if (trip.driverRef) {
-        let notification2 = new NotificationModel({ fromId: admin._id, toId: trip.driverRef, fromPhotoUrl: admin.photo, type: "TripCancelled", text: "Cancelled Your Trip", from: admin.firstName + admin.lastName })
+        let notification2 = new NotificationModel({
+          fromId: admin._id,
+          toId: trip.driverRef,
+          fromPhotoUrl: admin.photo || DEFAULT_FROM_PHOTO_URL,
+          type: "TripCancelled",
+          text: "Cancelled Your Trip",
+          from: admin.firstName + admin.lastName
+        })
         await notification2.save()
       }
 
@@ -1410,25 +1448,32 @@ exports.updateTrip = async (req, res) => {
     }
     if (req.body.status == "Completed") {
       req.body.completedAt = new Date()
-      let currentDate = new Date()
-      let endingDate = new Date()
-      console.log("Trip Started at", trip.startedAt)
-      let startingDate = new Date(trip.startedAt)
-      let differenceInMilliSeconds = endingDate - startingDate
+      const endingDate = new Date()
+      const startingDate = trip?.startedAt ? new Date(trip.startedAt) : null
 
-      console.log("Milli Seconds", differenceInMilliSeconds)
-      let totalPausedTime = 0;
+      // If startedAt is missing or invalid, avoid crashing the update
+      if (!startingDate || isNaN(startingDate.getTime())) {
+        req.body.timeTaken = 0
+      } else {
+        const differenceInMilliSeconds = endingDate - startingDate
 
-      trip.pauses.forEach(pause => {
-        if (pause.resumeTime) {
-          totalPausedTime += (pause.resumeTime - pause.pauseTime);
+        let totalPausedTime = 0
+        for (const pause of (trip.pauses || [])) {
+          // Guard missing pause fields
+          if (pause?.resumeTime && pause?.pauseTime) {
+            const resumeMs = new Date(pause.resumeTime).getTime()
+            const pauseMs = new Date(pause.pauseTime).getTime()
+            if (!isNaN(resumeMs) && !isNaN(pauseMs)) {
+              totalPausedTime += resumeMs - pauseMs
+            }
+          }
         }
-      });
 
-      // Convert milliseconds to hours
-      let TOTALPAUSEDTIMEINHOURS = totalPausedTime / (1000 * 60 * 60);
-      let hours = differenceInMilliSeconds / 3600000; // Convert
-      req.body.timeTaken = hours - TOTALPAUSEDTIMEINHOURS
+        // Convert milliseconds to hours
+        const totalPausedHours = totalPausedTime / (1000 * 60 * 60)
+        const hours = differenceInMilliSeconds / 3600000 // Convert ms -> hours
+        req.body.timeTaken = hours - totalPausedHours
+      }
     }
 
     const updatedTrip = await TripModel.findByIdAndUpdate(req.params.tripId, req.body, { new: true, runValidators: true });

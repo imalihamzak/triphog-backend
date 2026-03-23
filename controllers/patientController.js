@@ -1310,63 +1310,82 @@ exports.bulkUploadPatients = async (req, res) => {
       return res.status(400).json({ success: false, message: "CSV file is empty." });
     }
 
-    const header = lines[0].split(",").map((h) => h.trim());
-    const requiredHeaders = [
-      "firstName",
-      "lastName",
-      "EmailAddress",
-      "phoneNumber",
-      "location",
-      "age",
-      "gender",
-      "emergencyContactName",
-      "emergencyContactNumber",
-      "notes",
+    const rawHeader = lines[0].split(",").map((h) => h.trim());
+    const normalizeHeader = (value) =>
+      value
+        .replace(/^\uFEFF/, "") // Handle BOM on first header cell
+        .replace(/\s+/g, "") // Remove spaces (e.g., "First Name" -> "Firstname")
+        .replace(/_/g, "") // Remove underscores
+        .replace(/-/g, "") // Remove dashes
+        .toLowerCase();
+
+    // Support both header formats:
+    // - firstName / lastName / phoneNumber / EmailAddress (no spaces)
+    // - First Name / Last Name / Phone Number / Email Address (with spaces)
+    const headerIndex = {};
+    for (let idx = 0; idx < rawHeader.length; idx++) {
+      const normalized = normalizeHeader(rawHeader[idx]);
+      if (normalized) headerIndex[normalized] = idx;
+    }
+
+    const REQUIRED = [
+      { aliases: ["firstname"], display: "First Name" },
+      { aliases: ["lastname"], display: "Last Name" },
+      { aliases: ["emailaddress", "email"], display: "Email Address" },
+      { aliases: ["phonenumber"], display: "Phone Number" },
+      { aliases: ["location"], display: "Location" },
+      { aliases: ["age"], display: "Age" },
+      { aliases: ["gender"], display: "Gender" },
+      { aliases: ["emergencycontactname"], display: "Emergency Contact Name" },
+      {
+        aliases: ["emergencycontactnumber"],
+        display: "Emergency Contact Number",
+      },
+      { aliases: ["notes"], display: "Notes" },
     ];
 
-    const hasEmailAddress = header.includes("EmailAddress") || header.includes("EMailAddress");
-    const otherMissing = requiredHeaders
-      .filter((h) => h !== "EmailAddress")
-      .filter((h) => !header.includes(h));
+    const missingList = [];
+    for (const reqHeader of REQUIRED) {
+      const present = reqHeader.aliases.some((a) => headerIndex[a] !== undefined);
+      if (!present) missingList.push(reqHeader.display);
+    }
 
-    if (!hasEmailAddress || otherMissing.length) {
-      const missingList = [
-        ...(!hasEmailAddress ? ["EmailAddress"] : []),
-        ...otherMissing,
-      ];
+    if (missingList.length) {
       return res.status(400).json({
         success: false,
         message: `Missing required columns: ${missingList.join(", ")}`,
       });
     }
-
-    const headerIndex = Object.fromEntries(header.map((h, idx) => [h, idx]));
     const patientsToInsert = [];
 
     for (let i = 1; i < lines.length; i++) {
       const row = lines[i].split(",");
       if (!row.length || row.every((cell) => cell.trim() === "")) continue;
 
-      const get = (field) => (row[headerIndex[field]] || "").trim();
+      const getByAliases = (aliases) => {
+        for (const alias of aliases) {
+          const idx = headerIndex[alias];
+          if (idx !== undefined) return (row[idx] || "").trim();
+        }
+        return "";
+      };
 
-      const firstName = get("firstName");
-      const lastName = get("lastName");
-      const email =
-        (headerIndex.EmailAddress !== undefined ? get("EmailAddress") : "") ||
-        (headerIndex.EMailAddress !== undefined ? get("EMailAddress") : "");
+      const firstName = getByAliases(["firstname"]);
+      const lastName = getByAliases(["lastname"]);
+      const email = getByAliases(["emailaddress", "email"]);
       if (!firstName || !lastName || !email) continue;
 
       patientsToInsert.push({
         firstName,
         lastName,
         EMailAddress: email,
-        phoneNumber: get("phoneNumber"),
-        location: get("location"),
-        age: Number(get("age")) || 0,
-        gender: get("gender") || "None",
-        emergencyContactName: get("emergencyContactName"),
-        emergencyContactNumber: get("emergencyContactNumber"),
-        notes: get("notes"),
+        phoneNumber: getByAliases(["phonenumber"]),
+        location: getByAliases(["location"]),
+        age: Number(getByAliases(["age"])) || 0,
+        gender: getByAliases(["gender"]) || "None",
+        emergencyContactName: getByAliases(["emergencycontactname"]),
+        emergencyContactNumber: getByAliases(["emergencycontactnumber"]),
+        notes: getByAliases(["notes"]),
         addedBy: userId,
         companyCode: admin?.companyCode || "",
       });
