@@ -354,7 +354,7 @@ exports.createCheckoutSession = async (req, res) => {
 
     console.log(session);
 
-    res.json({ id: session.id });
+    res.json({ id: session.id, stripePublishableKey: process.env.STRIPE_PUBLISHABLE_KEY });
   } catch (error) {
     console.log(error);
     console.error(error);

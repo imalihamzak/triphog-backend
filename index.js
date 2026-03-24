@@ -526,6 +526,16 @@ app.get("/api/v1/check-jwt-config", (req, res) => {
   });
 });
 
+// Return Google Maps API key to authenticated clients (keeps key out of frontend bundle)
+const { verify } = require('./middlewares/verify');
+app.get("/api/v1/config/google-maps-key", verify, (req, res) => {
+  const key = process.env.GOOGLE_MAPS_API_KEY;
+  if (!key) {
+    return res.status(500).json({ success: false, message: "Google Maps API key not configured" });
+  }
+  res.json({ success: true, key });
+});
+
 // Base API route for health check
 app.get("/api/v1", (req, res) => {
   res.json({ 
