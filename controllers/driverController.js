@@ -18,6 +18,50 @@ const ChatConversation = require("../models/ChatConversation");
 const ChatMessage = require("../models/ChatMessage");
 const NotificationModel = require("../models/NotificationModel");
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getEmailFromBody(body = {}) {
+  const email =
+    body.EMailAddress ||
+    body.email ||
+    body.Email ||
+    body.eMailAddress ||
+    body.mail;
+  return typeof email === "string" ? email.trim() : "";
+}
+
+function getPasswordFromBody(body = {}) {
+  const password = body.password || body.newPassword || body.Password;
+  return typeof password === "string" ? password : "";
+}
+
+function findDriverByEmail(email) {
+  return DriverModel.findOne({
+    EMailAddress: { $regex: `^${escapeRegExp(email)}$`, $options: "i" },
+  });
+}
+
+function createOneTimeToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function normalizeStatus(status) {
+  return String(status || "").trim().toLowerCase();
+}
+
+function tripDateTimeValue(trip) {
+  const datePart = String(trip.pickUpDate || "").trim();
+  const timePart = String(trip.pickUpTime || "00:00").trim();
+  const safeTime = /^\d{1,2}:\d{2}/.test(timePart) ? timePart : "00:00";
+  const parsed = datePart ? new Date(`${datePart}T${safeTime.slice(0, 5)}:00`) : null;
+  if (parsed && !Number.isNaN(parsed.getTime())) return parsed.getTime();
+
+  const fallback = trip.createdAt ? new Date(trip.createdAt) : null;
+  return fallback && !Number.isNaN(fallback.getTime()) ? fallback.getTime() : 0;
+}
+
 /**
  * Geocode an address string to latitude/longitude using Google Geocoding API.
  * Used so drivers with a text location (e.g. "Lake Charles") appear on the map.
@@ -136,32 +180,45 @@ exports.deleteSelected = async (req, res) => {
   }
 };
 exports.forgotPassword = async (req, res) => {
-  let EMailAddress = req.body.EMailAddress;
+  let EMailAddress = getEmailFromBody(req.body);
   console.log("Forgot Password Implementation");
   try {
-    let driver = await DriverModel.findOne({ EMailAddress: EMailAddress });
+    if (!EMailAddress) {
+      return res.json({ success: false, message: "Email address is required." });
+    }
+
+    let driver = await findDriverByEmail(EMailAddress);
     console.log("Driver", driver);
     if (!driver) {
       res.json({ success: false, message: "Driver Not Found" });
     } else {
       const transport = createEmailTransporter();
-      const token = crypto.randomBytes(20).toString("hex");
+      const token = createOneTimeToken();
 
       driver.passwordResetToken = token;
       driver.passwordResetExpires = Date.now() + 3600000; // 1 hour expiry
 
       await driver.save(); //updating driver token and expire time
 
-      const resetURL = `${getFrontendUrl()}/driver/reset-password/${token}`;
+      const resetURL = `${getFrontendUrl()}/reset-password/${encodeURIComponent(token)}?userType=driver`;
       const message = `Welcome to Trip Hog!\n\nYou have requested to reset your password. Click on the link below to reset it:\n\n${resetURL}\n\nThis link will expire in 1 hour for security purposes.\n\nIf you did not request this password reset, please ignore this email.\n\nBest regards,\nTrip Hog Team`;
       const fromEmail = process.env.GMAIL_EMAIL || "noreply@triphog.com";
-      await sendEmailSafely(transport, {
+      const result = await sendEmailSafely(transport, {
         from: `Trip Hog <${fromEmail}>`,
         to: driver.EMailAddress,
         subject: "Reset Your Driver Password",
         text: message,
       });
-      res.json({ success: true });
+      if (result.success) {
+        return res.json({
+          success: true,
+          message: "Reset password email sent successfully.",
+        });
+      }
+      res.json({
+        success: false,
+        message: result.error || "Failed to send reset password email.",
+      });
     }
   } catch (e) {
     res.json({ success: false, message: e.message });
@@ -179,17 +236,25 @@ exports.resetPassword = async (req, res) => {
     if (!driver) {
       return res.json({ success: false, message: "Invalid or expired reset token" });
     }
-    console.log("password to set", req.body.password);
+    const password = getPasswordFromBody(req.body);
+    if (!password) {
+      return res.json({ success: false, message: "Password is required." });
+    }
+    if (req.body.confirmPassword && password !== req.body.confirmPassword) {
+      return res.json({ success: false, message: "Passwords do not match." });
+    }
+
     const salt = await bcrypt.genSalt(10);
     console.log("Driver Updated Encrypted PassWord");
-    const hashedPassword = await bcrypt.hash(req.body.password, salt);
+    const hashedPassword = await bcrypt.hash(password, salt);
     driver.password = hashedPassword;
     driver.passwordResetToken = undefined;
     driver.passwordResetExpires = undefined;
+    driver.status = "active";
 
     await driver.save();
 
-    res.json({ success: true });
+    res.json({ success: true, message: "Password reset successfully." });
   } catch (error) {
     res.json({ success: false, message: error.message });
   }
@@ -1008,10 +1073,21 @@ exports.getFilteredDrivers = async (req, res) => {
   }
 };
 exports.changePassword = async (req, res) => {
-  const { oldPassword, newPassword } = req.body;
+  const oldPassword = req.body.oldPassword || req.body.currentPassword;
+  const newPassword = req.body.newPassword || req.body.password;
   console.log("Changing Driver Password");
   console.log(req.body);
   try {
+    if (!oldPassword || !newPassword) {
+      return res.json({
+        success: false,
+        message: "Current password and new password are required.",
+      });
+    }
+    if (req.body.confirmPassword && newPassword !== req.body.confirmPassword) {
+      return res.json({ success: false, message: "Passwords do not match." });
+    }
+
     let driver = await DriverModel.findOne({ EMailAddress: req.EMailAddress });
     console.log("Driver Found", driver);
     if (!driver) {
@@ -1024,13 +1100,13 @@ exports.changePassword = async (req, res) => {
         let hashedPassword = await bcrypt.hash(newPassword, salt);
         driver.password = hashedPassword;
         await driver.save();
-        res.json({ success: true });
+        res.json({ success: true, message: "Password changed successfully." });
       } else {
         res.json({ success: false, message: "InCorrect Old Password" });
       }
     }
   } catch (e) {
-    res.json({ success: false });
+    res.json({ success: false, message: e.message });
   }
 };
 
@@ -1135,37 +1211,19 @@ exports.getAvailableDrivers = async (req, res) => {
   }
 };
 exports.getUpcomingTrips = async (req, res) => {
-  const handleCombine = (time, date) => {
-    const [hours, minutes] = time.split(":").map(Number);
-    const combinedDate = new Date(date);
-    combinedDate.setHours(hours, minutes, 0, 0);
-
-    return combinedDate;
-  };
-
   try {
-    let allTrips = await TripModel.find();
-    let MyTrips = allTrips.filter((trip) => {
-      return (
-        trip.status != "Completed" &&
-        trip.driverRef == req.driverId &&
-        trip.status != "Cancelled"
-      );
-    });
-    console.log(MyTrips);
-    let upcomingTrips = MyTrips.sort((t1, t2) => {
-      let d1 = handleCombine(t1.pickUpTime, t1.pickUpDate);
-      let d2 = handleCombine(t2.pickUpTime, t2.pickUpDate);
-      if (d1 < d2) {
-        return -1;
-      } else {
-        return 1;
-      }
-    });
+    const driverId = String(req.driverId);
+    let upcomingTrips = await TripModel.find({ driverRef: driverId }).lean();
+
+    upcomingTrips = upcomingTrips
+      .filter((trip) => !["completed", "cancelled"].includes(normalizeStatus(trip.status)))
+      .sort((t1, t2) => tripDateTimeValue(t1) - tripDateTimeValue(t2));
+
     console.log("Upcoming Trips", upcomingTrips);
     res.json({ success: true, upcomingTrips });
   } catch (error) {
-    res.json({ success: false });
+    console.error("Get upcoming driver trips error:", error.message);
+    res.json({ success: false, message: error.message });
   }
 };
 exports.getCancelledTrips = async (req, res) => {
@@ -1184,10 +1242,12 @@ exports.getCancelledTrips = async (req, res) => {
 exports.getMyTrips = async (req, res) => {
   try {
     // Query by driverRef so reassignments and updates reflect immediately on driver dashboard
-    let MyTrips = await TripModel.find({ driverRef: req.driverId }).sort({ pickUpDate: 1, pickUpTime: 1 });
+    let MyTrips = await TripModel.find({ driverRef: String(req.driverId) }).lean();
+    MyTrips.sort((t1, t2) => tripDateTimeValue(t1) - tripDateTimeValue(t2));
     res.json({ success: true, MyTrips });
   } catch (e) {
-    res.json({ success: false });
+    console.error("Get driver trips error:", e.message);
+    res.json({ success: false, message: e.message });
   }
 };
 
@@ -1247,9 +1307,9 @@ exports.addNewDriver = async (req, res) => {
       }
     }
     console.log(driver);
-    let token = Math.random().toString() + req.body.EMailAddress;
+    let token = createOneTimeToken();
     driver.token = token;
-    const passwordCreationLink = `${getFrontendUrl()}/driver/createpassword/${token}`;
+    const passwordCreationLink = `${getFrontendUrl()}/driver/createpassword/${encodeURIComponent(token)}`;
 
     console.log("Sending Link To Driver For Password Creation", driver);
     function replacePlaceholders(template, data) {
@@ -1278,6 +1338,7 @@ exports.addNewDriver = async (req, res) => {
         from: `Trip Hog <${fromEmail}>`,
         to: to,
         subject: subject,
+        text: `Welcome to Trip Hog!\n\nClick the link below to create your driver password:\n\n${data.passwordCreationLink}\n\nBest regards,\nTrip Hog Team`,
         html: htmlContent,
       };
 
@@ -1324,25 +1385,37 @@ exports.addNewDriver = async (req, res) => {
   }
 };
 exports.createPassword = async (req, res) => {
-  console.log("YourPassword", req.body.password);
   try {
-    let driver = await DriverModel.findOne({ token: req.params.token });
+    const password = getPasswordFromBody(req.body);
+    if (!password) {
+      return res.json({ success: false, message: "Password is required." });
+    }
+    if (req.body.confirmPassword && password !== req.body.confirmPassword) {
+      return res.json({ success: false, message: "Passwords do not match." });
+    }
+
+    const token = String(req.params.token || "").trim();
+    let driver = await DriverModel.findOne({ token });
     console.log("Driver", driver);
     if (!driver) {
       console.log("Not found!");
-      res.json({ success: false, notFound: true });
+      res.json({
+        success: false,
+        notFound: true,
+        message: "This password link is invalid or has already been used.",
+      });
     } else {
       console.log("Encrypting Password");
       let salt = await bcrypt.genSalt(10);
       console.log("Salt Value", salt);
-      let hashedPassword = await bcrypt.hash(req.body.password, salt);
+      let hashedPassword = await bcrypt.hash(password, salt);
       console.log("Hashed Password", hashedPassword);
       driver.password = hashedPassword;
       driver.status = "active";
       driver.token = "_sd__sdfd_0%34@_3454545";
       await driver.save();
       const admin = await Admin.findOne({ _id: driver.addedBy });
-      const token = jwt.sign(
+      const jwtToken = jwt.sign(
         {
           id: driver._id,
           role: "Driver",
@@ -1352,10 +1425,10 @@ exports.createPassword = async (req, res) => {
         JWT_SECRET,
         { expiresIn: "6d" }
       );
-      res.json({ success: true, token });
+      res.json({ success: true, token: jwtToken, message: "Password created successfully." });
     }
   } catch (error) {
-    res.json({ success: false });
+    res.json({ success: false, message: error.message });
   }
 };
 
@@ -1489,11 +1562,11 @@ exports.resendWelcomeEmail = async (req, res) => {
     if (!driver.EMailAddress) {
       return res.json({ success: false, message: "Driver has no email address." });
     }
-    const token = Math.random().toString() + driver.EMailAddress;
+    const token = createOneTimeToken();
     driver.token = token;
     await driver.save();
 
-    const passwordCreationLink = `${getFrontendUrl()}/driver/createpassword/${token}`;
+    const passwordCreationLink = `${getFrontendUrl()}/driver/createpassword/${encodeURIComponent(token)}`;
     function replacePlaceholders(template, data) {
       let result = template;
       for (const key in data) {
@@ -1514,6 +1587,7 @@ exports.resendWelcomeEmail = async (req, res) => {
       from: `Trip Hog <${fromEmail}>`,
       to: driver.EMailAddress,
       subject: "Welcome to Trip Hog!",
+      text: `Welcome to Trip Hog!\n\nClick the link below to create your driver password:\n\n${passwordCreationLink}\n\nBest regards,\nTrip Hog Team`,
       html: htmlContent,
     });
     if (result.success) {

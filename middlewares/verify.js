@@ -2,10 +2,17 @@ const jwt = require("jsonwebtoken");
 const JWT_SECRET = require("../config/jwtSecret");
 const UserModel = require("../models/UserModel");
 
+const getTokenFromHeaders = (req) => {
+  let token = req.headers["authorization"] || req.headers["Authorization"];
+  if (token && typeof token === "string") {
+    token = token.replace(/^\s*Bearer\s+/i, "").trim();
+  }
+  return token;
+};
+
 let verify = (req, res, next) => {
   try {
-    let token = req.headers["authorization"] || req.headers["Authorization"];
-    if (token && typeof token === "string") token = token.replace(/^\s*Bearer\s+/i, "").trim();
+    let token = getTokenFromHeaders(req);
     if (!token) {
       res.json({ success: false, message: "Not Token Provided!" });
     } else {
@@ -71,9 +78,38 @@ let verify = (req, res, next) => {
   }
 };
 
+const verifyDriver = (req, res, next) => {
+  try {
+    const token = getTokenFromHeaders(req);
+    if (!token) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+      if (err) {
+        console.log("Driver JWT Error:", err);
+        return res.status(403).json({ success: false, message: "Forbidden" });
+      }
+
+      if (user.role !== "Driver") {
+        return res.status(403).json({ success: false, message: "Unauthorized" });
+      }
+
+      req.user = user;
+      req.userId = user.id;
+      req.userRole = "Driver";
+      req.driverId = user.id;
+      req.EMailAddress = user.EMailAddress;
+      next();
+    });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
 const verifySuperAdmin = (req, res, next) => {
   try {
-    const token = req.headers["authorization"];
+    const token = getTokenFromHeaders(req);
 
     if (!token) {
       return res.status(401).json({ success: false, message: "Forbidden!" });
@@ -98,4 +134,4 @@ const verifySuperAdmin = (req, res, next) => {
   }
 };
 
-module.exports = { verify, verifySuperAdmin };
+module.exports = { verify, verifyDriver, verifySuperAdmin };

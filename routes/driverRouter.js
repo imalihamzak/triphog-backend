@@ -38,10 +38,8 @@ const {
   getConversationChat,
   deleteConversations,
 } = require("../controllers/superAdminController");
-const { verify } = require("../middlewares/verify");
+const { verify, verifyDriver } = require("../middlewares/verify");
 const multer = require("multer");
-const jwt = require("jsonwebtoken");
-const JWT_SECRET = require("../config/jwtSecret");
 
 let storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -62,56 +60,8 @@ router.delete("/deleteselected", deleteSelected);
 router.post("/forgot-password", forgotPassword);
 router.post("/reset-password/:token", resetPassword);
 router.get("/getmystatistics/:driverId", getProfileStatistics);
-router.get(
-  "/getstatistics",
-  (req, res, next) => {
-    const token = req.headers["authorization"];
-    if (token) {
-      jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-          return res.status(403).json({ message: "Forbidden" });
-        }
-        console.log("Driver", user);
-
-        if ((user.role = "Driver")) {
-          req.driverId = user.id;
-          console.log("Getting Upcoming Trips");
-          next();
-        } else {
-          res.json({ success: false, message: "UnAuthorized" });
-        }
-      });
-    } else {
-      res.status(401).json({ message: "Unauthorized" });
-    }
-  },
-  getStatistics
-);
-router.put(
-  "/updatelocation",
-  (req, res, next) => {
-    const token = req.headers["authorization"];
-    if (token) {
-      jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-          return res.status(403).json({ message: "Forbidden" });
-        }
-        console.log("Driver", user);
-
-        if ((user.role = "Driver")) {
-          req.driverId = user.id;
-          console.log("Getting Upcoming Trips");
-          next();
-        } else {
-          res.json({ success: false, message: "UnAuthorized" });
-        }
-      });
-    } else {
-      res.status(401).json({ message: "Unauthorized" });
-    }
-  },
-  updateLocation
-);
+router.get("/getstatistics", verifyDriver, getStatistics);
+router.put("/updatelocation", verifyDriver, updateLocation);
 router.post("/pay/:driverId", verify, pay);
 router.get("/getdriven/:startDate/:endDate", verify, getDrivenDrivers);
 router.get("/getfiltereddrivers/:filter", verify, getFilteredDrivers);
@@ -129,55 +79,8 @@ router.get("/getdrivers", verify, getDrivers);
 router.get("/getavailabledrivers", verify, getAvailableDrivers);
 router.get("/getdriver/:Id", verify, getDriver);
 router.post("/resend-welcome-email/:Id", verify, resendWelcomeEmail);
-router.get(
-  "/getupcomingtrips",
-  (req, res, next) => {
-    const token = req.headers["authorization"];
-    if (token) {
-      jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-          return res.status(403).json({ message: "Forbidden" });
-        }
-        console.log("Driver", user);
-
-        if ((user.role = "Driver")) {
-          req.driverId = user.id;
-          console.log("Getting Upcoming Trips");
-          next();
-        } else {
-          res.json({ success: false, message: "UnAuthorized" });
-        }
-      });
-    } else {
-      res.status(401).json({ message: "Unauthorized" });
-    }
-  },
-  getUpcomingTrips
-);
-router.get(
-  "/getcancelledtrips",
-  (req, res, next) => {
-    const token = req.headers["authorization"];
-    if (token) {
-      jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-          return res.status(403).json({ message: "Forbidden" });
-        }
-        console.log("Driver", user);
-
-        if ((user.role = "Driver")) {
-          req.driverId = user.id;
-          next();
-        } else {
-          res.json({ success: false, message: "UnAuthorized" });
-        }
-      });
-    } else {
-      res.status(401).json({ message: "Unauthorized" });
-    }
-  },
-  getCancelledTrips
-);
+router.get("/getupcomingtrips", verifyDriver, getUpcomingTrips);
+router.get("/getcancelledtrips", verifyDriver, getCancelledTrips);
 router.get("/getdriversbydate/:date", verify, getDriversByDate);
 router.delete("/delete/:Id", verify, deleteDriver);
 router.put(
@@ -201,69 +104,10 @@ router.post("/chat/create-group", verify, createGroup);
 router.delete("/chat/delete-conversation", verify, deleteConversations);
 router.post("/chat/leave-group", verify, require("../controllers/superAdminController").leaveGroup);
 router.post("/chat/update-group", verify, require("../controllers/superAdminController").updateGroup);
-router.get(
-  "/getmytrips",
-  (req, res, next) => {
-    const token = req.headers["authorization"];
-    console.log("Driver Token:", token);
-
-    if (!token) {
-      console.log("No token provided");
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-      if (err) {
-        console.log("JWT Error:", err);
-        return res.status(403).json({ message: "Forbidden" });
-      }
-
-      console.log("Decoded User:", user);
-
-      if (user.role === "Driver") {
-        req.driverId = user.id;
-        console.log("Driver Authorized:", req.driverId);
-        next();
-      } else {
-        console.log("Unauthorized Role:", user.role);
-        return res.json({ success: false, message: "Unauthorized" });
-      }
-    });
-  },
-  getMyTrips
-);
+router.get("/getmytrips", verifyDriver, getMyTrips);
 
 router.post("/createpassword/:token", createPassword);
-router.post(
-  "/changepassword",
-  (req, res, next) => {
-    console.log("Changing Password");
-    const token = req.headers["authorization"];
-    try {
-      const token = req.headers["authorization"];
-      if (!token) {
-        res.json({ success: false, message: "Not Token Provided" });
-      } else {
-        console.log("Verifying");
-
-        jwt.verify(token, JWT_SECRET, (err, user) => {
-          if (err) {
-            console.log("Error While Verifying");
-            res.json({ success: false, message: "Invalid Token!" });
-          } else {
-            console.log("JWT TOKEN verification done");
-            req.EMailAddress = user.EMailAddress;
-
-            next();
-          }
-        });
-      }
-    } catch (e) {
-      res.json({ success: false, token });
-    }
-  },
-  changePassword
-);
+router.post("/changepassword", verifyDriver, changePassword);
 router.get("/stats", verify, getDriverStats);
 
 // Test endpoint for location updates (for debugging)
