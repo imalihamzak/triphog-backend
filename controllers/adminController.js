@@ -145,7 +145,11 @@ exports.addDoc = async (req, res) => {
     const userId = new mongoose.Types.ObjectId(req.userId); // Ensure it's a valid ObjectId
     console.log(typeof userId);
     let admin = await Admin.findOne({ _id: userId });
-    let docUrl = getUploadsBaseUrl() + "/" + req.file.path;
+    const filename =
+      req.file.filename ||
+      req.file.originalname ||
+      String(req.file.path || "").split(/[\\/]/).pop();
+    let docUrl = `${getUploadsBaseUrl()}/uploads/${encodeURIComponent(filename)}`;
 
     if (admin) {
       let _docs = admin.docs;

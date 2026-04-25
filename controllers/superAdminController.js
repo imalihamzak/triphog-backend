@@ -24,7 +24,11 @@ exports.addDoc = async (req, res) => {
   console.log("Adding Doc For admin");
   try {
     let superAdmin = await SuperAdminModel.findOne({ _id: req.userId });
-    let docUrl = getUploadsBaseUrl() + "/" + req.file.path;
+    const filename =
+      req.file.filename ||
+      req.file.originalname ||
+      String(req.file.path || "").split(/[\\/]/).pop();
+    let docUrl = `${getUploadsBaseUrl()}/uploads/${encodeURIComponent(filename)}`;
     if (superAdmin) {
       let _docs = superAdmin.docs;
       _docs = _docs.concat({

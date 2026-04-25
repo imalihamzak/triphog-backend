@@ -5,6 +5,7 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const { initializeSocket } = require('./io');
 
@@ -144,6 +145,98 @@ app.use('/api/v1/uploads', (req, res, next) => {
 // Serve uploaded images through API endpoint (more reliable than static files)
 // MUST be registered BEFORE static files and other API routes
 
+function getUploadRoots() {
+  const roots = [
+    process.env.UPLOADS_DIR,
+    path.resolve(__dirname, 'uploads'),
+    path.resolve(process.cwd(), 'uploads'),
+    path.resolve(__dirname, '..', 'uploads'),
+    path.resolve(process.cwd(), 'server', 'uploads'),
+    path.resolve(process.cwd(), 'backend', 'uploads'),
+  ].filter(Boolean);
+
+  return [...new Set(roots.map((root) => path.resolve(root)))];
+}
+
+function isPathInside(childPath, parentPath) {
+  const child = path.resolve(childPath);
+  const parent = path.resolve(parentPath);
+  const relative = path.relative(parent, child);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function getFilenameCandidates(filename) {
+  const candidates = new Set();
+  const addCandidate = (value) => {
+    if (!value || typeof value !== 'string') return;
+    const normalized = value.replace(/\\/g, '/').trim();
+    if (!normalized) return;
+    candidates.add(normalized);
+    candidates.add(path.basename(normalized));
+  };
+
+  addCandidate(filename);
+  addCandidate(filename.replace(/\+/g, ' '));
+  addCandidate(filename.replace(/_/g, ' '));
+  addCandidate(filename.replace(/\s+/g, '_'));
+  addCandidate(filename.replace(/[_\s]+/g, ' '));
+  addCandidate(filename.replace(/[_\s]+/g, '_'));
+
+  return [...candidates];
+}
+
+function findFileRecursive(dir, targetName) {
+  if (!fs.existsSync(dir)) return null;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const targetLower = targetName.toLowerCase();
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isFile()) {
+      if (entry.name.toLowerCase() === targetLower) return { fullPath, name: entry.name };
+      try {
+        if (decodeURIComponent(entry.name).toLowerCase() === targetLower) {
+          return { fullPath, name: entry.name };
+        }
+      } catch (_) {}
+    } else if (entry.isDirectory()) {
+      const found = findFileRecursive(fullPath, targetName);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function findUploadFile(filename) {
+  const uploadRoots = getUploadRoots();
+  const candidates = getFilenameCandidates(filename);
+
+  for (const root of uploadRoots) {
+    for (const candidate of candidates) {
+      const exactPath = path.resolve(root, candidate);
+      if (isPathInside(exactPath, root) && fs.existsSync(exactPath)) {
+        return { fullPath: exactPath, name: path.basename(exactPath) };
+      }
+
+      const baseName = path.basename(candidate);
+      const basePath = path.resolve(root, baseName);
+      if (isPathInside(basePath, root) && fs.existsSync(basePath)) {
+        return { fullPath: basePath, name: path.basename(basePath) };
+      }
+    }
+  }
+
+  for (const root of uploadRoots) {
+    for (const candidate of candidates) {
+      const found = findFileRecursive(root, path.basename(candidate));
+      if (found && isPathInside(found.fullPath, root)) {
+        return found;
+      }
+    }
+  }
+
+  return null;
+}
+
 // NEW CLEAN APPROACH: Handle ANY filename with special characters
 // Use regex route to capture everything after /uploads/ (handles any filename)
 app.get(/^\/uploads\/(.+)$/, (req, res) => {
@@ -177,65 +270,20 @@ app.get(/^\/uploads\/(.+)$/, (req, res) => {
       return res.status(400).json({ success: false, message: 'Filename required' });
     }
     
-    const uploadsDir = path.resolve(__dirname, 'uploads');
-    const uploadsDirCwd = path.join(process.cwd(), 'uploads');
-    let filePath = path.join(uploadsDir, filename);
-    
-    // Normalize path separators (Windows uses \, Unix uses /)
-    filePath = path.normalize(filePath);
-    
-    // Security: Ensure file is within uploads directory (prevent directory traversal)
-    if (!filePath.startsWith(uploadsDir)) {
+    const uploadRoots = getUploadRoots();
+    const firstRoot = uploadRoots[0] || path.resolve(__dirname, 'uploads');
+    const requestedPath = path.resolve(firstRoot, filename);
+
+    // Security: Ensure file request cannot escape the upload roots.
+    if (!uploadRoots.some((root) => isPathInside(requestedPath, root))) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
-    
-    // Try exact match first
-    if (fs.existsSync(filePath)) {
-      return serveFile(filePath, filename, res);
-    }
-    
-    // Try with just the basename (in case path had extra segments)
-    const baseName = path.basename(filename);
-    if (baseName !== filename) {
-      const altPath = path.join(uploadsDir, baseName);
-      if (fs.existsSync(altPath)) {
-        return serveFile(altPath, baseName, res);
-      }
-    }
-    
-    // Case-insensitive + recursive search; try both uploads locations (__dirname vs cwd)
-    function findFileRecursive(dir, targetName) {
-      if (!fs.existsSync(dir)) return null;
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      const targetLower = targetName.toLowerCase();
-      for (const e of entries) {
-        const fullPath = path.join(dir, e.name);
-        if (e.isFile()) {
-          if (e.name.toLowerCase() === targetLower) return { fullPath, name: e.name };
-          try {
-            if (decodeURIComponent(e.name).toLowerCase() === targetLower) return { fullPath, name: e.name };
-          } catch (_) {}
-        } else if (e.isDirectory()) {
-          const found = findFileRecursive(fullPath, targetName);
-          if (found) return found;
-        }
-      }
-      return null;
-    }
-    
+
     try {
-      let found = findFileRecursive(uploadsDir, filename) || findFileRecursive(uploadsDir, baseName);
-      if (!found && uploadsDir !== uploadsDirCwd) {
-        found = findFileRecursive(uploadsDirCwd, filename) || findFileRecursive(uploadsDirCwd, baseName);
-      }
-      if (found) {
-        const resolved = path.resolve(found.fullPath);
-        if (resolved.startsWith(path.resolve(uploadsDir)) || resolved.startsWith(path.resolve(uploadsDirCwd))) {
-          return serveFile(found.fullPath, found.name, res);
-        }
-      }
+      const found = findUploadFile(filename);
+      if (found) return serveFile(found.fullPath, found.name, res);
     } catch (dirErr) {
-      console.error('Error searching directory:', dirErr);
+      console.error('Error searching uploads directories:', dirErr);
     }
     
     // File not found
@@ -269,11 +317,19 @@ function serveFile(filePath, filename, res) {
     '.png': 'image/png',
     '.gif': 'image/gif',
     '.webp': 'image/webp',
-    '.svg': 'image/svg+xml'
+    '.svg': 'image/svg+xml',
+    '.pdf': 'application/pdf',
+    '.csv': 'text/csv',
+    '.txt': 'text/plain',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xls': 'application/vnd.ms-excel',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   };
   const contentType = contentTypes[ext] || 'application/octet-stream';
   
   res.contentType(contentType);
+  res.header('Content-Disposition', `inline; filename="${path.basename(filename).replace(/"/g, '')}"`);
   
   // Try sendFile first (more efficient)
   res.sendFile(filePath, (err) => {
@@ -326,6 +382,11 @@ app.get('/api/v1/uploads/:filename', (req, res) => {
       });
     }
     
+    const foundUpload = findUploadFile(filename);
+    if (foundUpload) {
+      return serveFile(foundUpload.fullPath, foundUpload.name, res);
+    }
+
     // Use absolute path for sendFile
     const filePath = path.resolve(__dirname, 'uploads', filename);
     const fs = require('fs');

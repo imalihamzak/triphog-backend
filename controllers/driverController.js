@@ -108,7 +108,7 @@ exports.addDoc = async (req, res) => {
     let driver = await DriverModel.findOne({ _id: req.params.driverId });
     // Use uploads/ + filename (normalize path separators for URLs)
     const filename = req.file.filename || req.file.originalname || path.basename(req.file.path);
-    let docUrl = getUploadsBaseUrl() + "/uploads/" + filename.replace(/\\/g, "/");
+    let docUrl = `${getUploadsBaseUrl()}/uploads/${encodeURIComponent(path.basename(filename))}`;
     if (driver) {
       let _docs = driver.docs;
       let doc = {
